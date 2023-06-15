@@ -79,13 +79,11 @@ func (ps ProxyServer) handle(ctx context.Context, conn net.Conn) {
 	}()
 
 	// Get a UDP datagram? Forward on websocket
-	//TODO make sure this is instead the maximum size of a quic message
-	buf := make([]byte, 4000)
+	buf := make([]byte, ReadBufSize)
 	for {
 		buf = buf[:cap(buf)]
 		// Get packet
 		log.Println("PROXYSERVER:UDP:READ: Reading")
-		//n, err := io.ReadFull(udpConn, buf)
 		n, _, err := udpConn.ReadFrom(buf)
 		if err != nil {
 			log.Printf("PROXYSERVER:UDP:READ:ERROR: %s", err)

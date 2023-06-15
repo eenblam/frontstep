@@ -52,9 +52,13 @@ func main() {
 	go proxyClient.Run(ctx)
 
 	proxyClient.WriteTo([]byte("hello"), proxyClient.LocalAddr())
-	buf := make([]byte, 1024)
-	proxyClient.ReadMsgUDP(buf, nil)
-	log.Printf("ECHOSERVER:MAIN:ReadMsgUDP: Got %s", string(buf))
+	buf := make([]byte, frontstep.ReadBufSize)
+	n, _, _, _, err := proxyClient.ReadMsgUDP(buf, nil)
+	if err != nil {
+		log.Printf("ECHOSERVER:MAIN:ReadMsgUDP:ERROR: %s", err)
+	} else {
+		log.Printf("ECHOSERVER:MAIN:ReadMsgUDP: Got %s", string(buf[:n]))
+	}
 
 	// Let services tear down gracefully
 	cancelFunc()

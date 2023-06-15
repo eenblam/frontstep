@@ -18,6 +18,17 @@ import (
 	"github.com/gobwas/ws/wsutil"
 )
 
+// From quic-go/internal/protocol/protocol.go:
+// > MaxPacketBufferSize maximum packet size of any QUIC packet, based on
+// > ethernet's max size, minus the IP and UDP headers. IPv6 has a 40 byte header,
+// > UDP adds an additional 8 bytes.  This is a total overhead of 48 bytes.
+// > Ethernet's max packet size is 1500 bytes,  1500 - 48 = 1452.
+// Context: QUIC shouldn't allow IP packet fragmentation, so it has to fit into one Ethernet frame.
+// Hence we can work backwards from the frame size.
+// Also, if we set DF (don't fragment) for the network layer and pass it a packet
+// larger than the MTU, we should expect it to be discarded.
+const ReadBufSize = 1452
+
 // From https://github.com/quic-go/quic-go/blob/2ff71510a9c447aad7f5a574fe0f6cf715e749f1/client.go#L47
 func DialAddr(addr string) (*ProxyClient, error) {
 	// We replace net.ListenUDP with our own type
@@ -86,7 +97,8 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		b := make([]byte, 0)
+		// Both sides of the channel should have the same buffer capacity
+		b := make([]byte, ReadBufSize)
 		oob := make([]byte, 0)
 		for {
 			select {
@@ -95,14 +107,14 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 				return
 			default:
 			}
-			_, _, _, udpAddr, err := pc.UDPConn.ReadMsgUDP(b, oob)
+			n, _, _, udpAddr, err := pc.UDPConn.ReadMsgUDP(b, oob)
 			if err != nil {
 				log.Printf("PROXYCLIENT:UDP:READ:ERROR: %s", err)
 				continue
 			}
 			//TODO call cancel if UDPConn is closed!
 
-			pc.readLocal <- MsgUDP{b, udpAddr}
+			pc.readLocal <- MsgUDP{b[:n], udpAddr}
 		}
 	}()
 
@@ -127,6 +139,7 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 			}
 			if err == io.EOF {
 				log.Println("PROXYCLIENT:WS:READ: Received EOF")
+				cancel()
 				return
 			}
 			if op == ws.OpClose {
@@ -191,37 +204,30 @@ func (pc *ProxyClient) WriteMsgUDP(bs, oob []byte, addr *net.UDPAddr) (int, int,
 	//return pc.UDPConn.WriteMsgUDP(p, oob, addr)
 }
 
-// TODO not implementing this yet, basically same as ReadMsgUDP
 func (pc *ProxyClient) ReadFrom(bs []byte) (int, net.Addr, error) {
-	log.Println("PROXYCLIENT:ReadFrom: Called")
-	return pc.UDPConn.ReadFrom(bs)
+	select {
+	case msgUDP := <-pc.readProxy:
+		n := copy(bs, msgUDP.bs)
+		log.Printf("PROXYCLIENT:UDP:ReadFrom:FromProxy: %s", bs[:n])
+		return n, msgUDP.addr, nil
+	case msgUDP := <-pc.readLocal:
+		n := copy(bs, msgUDP.bs)
+		log.Printf("PROXYCLIENT:UDP:ReadFrom:FromLocal: %s", bs[:n])
+		return n, msgUDP.addr, nil
+	}
 }
 
-// n int, oobn int, flags int, addr *net.UDPAddr, err error
+// Returns (n, oobn, flags int, addr *net.UDPAddr, err error)
+// but since there's no underlying raw socket, we just return 0 for oobn and flags.
 func (pc *ProxyClient) ReadMsgUDP(bs, oob []byte) (int, int, int, *net.UDPAddr, error) {
-	// Check read channel, then try reading
-	log.Println("PROXYCLIENT:ReadMsgUDP: Begin")
-	defer log.Println("PROXYCLIENT:ReadMsgUDP: End")
-	for {
-		// Read UDP messages, prioritizing remote proxy reads over local proxy
-		// (Need a nested select for prioritization. Maybe doesn't matter?)
-		select {
-		//TODO there's room for lost data here:
-		// caller could pass small bs, but we could read a large packet.
-		// We'll need to cache this data somewhere.
-		case msgUDP := <-pc.readProxy:
-			n := copy(bs, msgUDP.bs)
-			log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromProxy: %s", bs)
-			return n, 0, 0, msgUDP.addr, nil
-		default:
-			select {
-			case msgUDP := <-pc.readLocal:
-				n := copy(bs, msgUDP.bs)
-				log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromLocal: %s", bs)
-				return n, 0, 0, msgUDP.addr, nil
-			default: // don't block
-			}
-		}
-
+	select {
+	case msgUDP := <-pc.readProxy:
+		n := copy(bs, msgUDP.bs)
+		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromProxy: %s", bs[:n])
+		return n, 0, 0, msgUDP.addr, nil
+	case msgUDP := <-pc.readLocal:
+		n := copy(bs, msgUDP.bs)
+		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromLocal: %s", bs[:n])
+		return n, 0, 0, msgUDP.addr, nil
 	}
 }
