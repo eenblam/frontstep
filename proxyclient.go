@@ -68,8 +68,8 @@ type ProxyClient struct {
 // Response from ReadMsgUDP
 // n int, oobn int, flags int, addr *net.UDPAddr, err error
 type MsgUDP struct {
-	bs   []byte
-	addr *net.UDPAddr
+	bs  []byte
+	err error
 }
 
 func (pc *ProxyClient) Run(ctx context.Context) {
@@ -107,14 +107,14 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 				return
 			default:
 			}
-			n, _, _, udpAddr, err := pc.UDPConn.ReadMsgUDP(b, oob)
+			n, _, _, _, err := pc.UDPConn.ReadMsgUDP(b, oob)
 			if err != nil {
 				log.Printf("PROXYCLIENT:UDP:READ:ERROR: %s", err)
 				continue
 			}
 			//TODO call cancel if UDPConn is closed!
 
-			pc.readLocal <- MsgUDP{b[:n], udpAddr}
+			pc.readLocal <- MsgUDP{b[:n], err}
 		}
 	}()
 
@@ -135,10 +135,12 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 			if err != nil && err != io.EOF {
 				//TODO handle error
 				log.Printf("PROXYCLIENT:WS:READ:ERROR: %s", err)
+				pc.readProxy <- MsgUDP{nil, err}
 				continue
 			}
 			if err == io.EOF {
 				log.Println("PROXYCLIENT:WS:READ: Received EOF")
+				pc.readProxy <- MsgUDP{nil, err}
 				cancel()
 				return
 			}
@@ -151,7 +153,7 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 				log.Printf("PROXYCLIENT:WS:GOT:ERROR: Expected OpBinary, got %#v with data: %s", op, string(data))
 				continue
 			}
-			pc.readProxy <- MsgUDP{data, pc.dstUDPAddr}
+			pc.readProxy <- MsgUDP{data, nil}
 		}
 	}()
 
@@ -209,11 +211,14 @@ func (pc *ProxyClient) ReadFrom(bs []byte) (int, net.Addr, error) {
 	case msgUDP := <-pc.readProxy:
 		n := copy(bs, msgUDP.bs)
 		log.Printf("PROXYCLIENT:UDP:ReadFrom:FromProxy: %s", bs[:n])
-		return n, msgUDP.addr, nil
+		// We can always return the original address:
+		// since we're emulating a "connected" UDP socket,
+		// the kernel should only be returning packets from our destination.
+		return n, pc.dstUDPAddr, msgUDP.err
 	case msgUDP := <-pc.readLocal:
 		n := copy(bs, msgUDP.bs)
 		log.Printf("PROXYCLIENT:UDP:ReadFrom:FromLocal: %s", bs[:n])
-		return n, msgUDP.addr, nil
+		return n, pc.dstUDPAddr, msgUDP.err
 	}
 }
 
@@ -224,10 +229,10 @@ func (pc *ProxyClient) ReadMsgUDP(bs, oob []byte) (int, int, int, *net.UDPAddr, 
 	case msgUDP := <-pc.readProxy:
 		n := copy(bs, msgUDP.bs)
 		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromProxy: %s", bs[:n])
-		return n, 0, 0, msgUDP.addr, nil
+		return n, 0, 0, pc.dstUDPAddr, msgUDP.err
 	case msgUDP := <-pc.readLocal:
 		n := copy(bs, msgUDP.bs)
 		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromLocal: %s", bs[:n])
-		return n, 0, 0, msgUDP.addr, nil
+		return n, 0, 0, pc.dstUDPAddr, msgUDP.err
 	}
 }
