@@ -1,10 +1,6 @@
 package frontstep
 
-// Ugh I think I should just pay Fastly for websockets
-// If someone can pay for Fastly, not unreasonable to also pay for websockets
-
 import (
-	//"net/http"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -29,7 +25,6 @@ import (
 // larger than the MTU, we should expect it to be discarded.
 const ReadBufSize = 1452
 
-// From https://github.com/quic-go/quic-go/blob/2ff71510a9c447aad7f5a574fe0f6cf715e749f1/client.go#L47
 func DialAddr(dstAddr, proxyAddr string) (*ProxyClient, error) {
 	// We replace net.ListenUDP with our own type
 	netConn, err := net.Dial("udp", dstAddr)
@@ -194,8 +189,6 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 }
 
 func (pc *ProxyClient) WriteTo(bs []byte, addr net.Addr) (int, error) {
-	//TODO error if addr doesn't match pc.dstAddr
-	log.Printf("PROXYCLIENT:UDP:WriteTo: %v", addr)
 	log.Print("PROXYCLIENT:UDP:WriteTo: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
 	pc.writeProxy <- bs
 	return len(bs), nil
@@ -204,8 +197,6 @@ func (pc *ProxyClient) WriteTo(bs []byte, addr net.Addr) (int, error) {
 }
 
 func (pc *ProxyClient) WriteMsgUDP(bs, oob []byte, addr *net.UDPAddr) (int, int, error) {
-	//TODO error if addr doesn't match pc.dstAddr
-	log.Printf("PROXYCLIENT:UDP:WriteMsgUDP: %v", addr)
 	log.Print("PROXYCLIENT:UDP:WriteMsgUDP: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
 	pc.writeProxy <- bs
 	//TODO should we lie about sending oob bytes?

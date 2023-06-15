@@ -1,6 +1,6 @@
 package main
 
-// This is just a small UDP echo server for
+// This is just a small UDP echo server for demonstration purposes
 
 import (
 	"context"
@@ -38,7 +38,6 @@ func main() {
 	}
 
 	go ps.Run(ctx)
-	//defer ps.Close() //TODO
 	time.Sleep(time.Second)
 
 	// Run local client
@@ -68,8 +67,8 @@ func main() {
 	//wg.Wait()
 }
 
-// echoServer(ctx, fmt.Sprintf("%s:%d", echoIP, echoPort))
 // Start a UDP server that echoes all data on the first stream opened by the client
+// echoServer(ctx, fmt.Sprintf("%s:%d", echoIP, echoPort))
 func echoServer(ctx context.Context, address string) {
 	conn, err := net.ListenPacket("udp", address)
 	if err != nil {
