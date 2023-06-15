@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"time"
@@ -12,15 +11,9 @@ import (
 	"github.com/eenblam/frontstep"
 )
 
-// TODO set up hostname resolution
-// const echoServerAddr = "localhost:4242"
-const echoIP = "127.0.0.1"
-const echoPort = 4242
+const echoServerAddr = "localhost:4242"
 
-var echoServerAddr = fmt.Sprintf("%s:%d", echoIP, echoPort)
-
-// const proxyServerAddr = "localhost:3636"
-const proxyServerAddr = "127.0.0.1:3636"
+const proxyServerAddr = "localhost:3636"
 
 const writeTimeout = 1 * time.Second
 
@@ -33,8 +26,7 @@ func main() {
 	// Start "remote" proxy
 	// This would normally be domain-fronted
 	ps := &frontstep.ProxyServer{
-		RemoteUDPAddr: echoServerAddr,
-		LocalWSAddr:   proxyServerAddr,
+		LocalWSAddr: proxyServerAddr,
 	}
 
 	go ps.Run(ctx)
@@ -42,7 +34,7 @@ func main() {
 
 	// Run local client
 	// For this example, we aren't interested in sending anything over UDP, only WebSockets.
-	proxyClient, err := frontstep.DialAddr("1.2.3.4:9000", proxyServerAddr)
+	proxyClient, err := frontstep.DialAddr(echoServerAddr, proxyServerAddr)
 	if err != nil {
 		cancelFunc()
 		panic(err)
@@ -68,7 +60,6 @@ func main() {
 }
 
 // Start a UDP server that echoes all data on the first stream opened by the client
-// echoServer(ctx, fmt.Sprintf("%s:%d", echoIP, echoPort))
 func echoServer(ctx context.Context, address string) {
 	conn, err := net.ListenPacket("udp", address)
 	if err != nil {

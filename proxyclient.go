@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -55,7 +57,6 @@ func DialAddr(dstAddr, proxyAddr string) (*ProxyClient, error) {
 }
 
 // TODO domain fronting
-// TODO handle https://{proxyaddr}/?addr={addr}
 type ProxyClient struct {
 	net.UDPConn
 	dstAddr    string
@@ -78,11 +79,13 @@ type MsgUDP struct {
 func (pc *ProxyClient) Run(ctx context.Context) {
 	// We want to cancel if proxy sends opclose
 	ctx, cancel := context.WithCancel(ctx)
-
 	defer cancel()
 	log.Println("PROXYCLIENT: Running")
 
-	proxyWSAddr := "ws://" + pc.proxyAddr
+	//TODO handle ws vs wss depending on host?
+	query := url.Values{"address": []string{pc.dstAddr}}.Encode()
+	proxyWSAddr := fmt.Sprintf("ws://%s/?%s", pc.proxyAddr, query)
+
 	// returns (net.Conn, *bufio.Reader, Handshake, error)
 	// Can ignore Reader, but may want to do pbufio.PutReader(buf) to recover memory
 	conn, _, _, err := ws.Dial(ctx, proxyWSAddr)

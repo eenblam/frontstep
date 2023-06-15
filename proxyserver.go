@@ -11,40 +11,44 @@ import (
 )
 
 type ProxyServer struct {
-	// Where we're sending UDP
-	RemoteUDPAddr string
 	// Where we're serving HTTP/WebSocket
 	LocalWSAddr string
 }
 
 func (ps ProxyServer) Run(ctx context.Context) {
 	// Get a websocket connection
-	//TODO fix ip/port
 	//TODO add cancel context
 	log.Println("PROXYSERVER: Running")
 	http.ListenAndServe(ps.LocalWSAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("PROXYSERVER:HTTP:GOT: URL %s", r.URL)
+		rawAddr := r.URL.Query().Get("address")
+		remoteUDPAddr, err := net.ResolveUDPAddr("udp", rawAddr)
+		if err != nil || rawAddr == "" {
+			// Note that rawAddr == "" won't trigger an err, have to check it separately
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		log.Printf("PROXYSERVER:HTTP: connecting %s to %s", r.RemoteAddr, remoteUDPAddr)
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
 		if err != nil {
 			log.Printf("Couldn't upgrade request from %s: %s", conn.RemoteAddr().String(), err)
 			return
 		}
-		go ps.handle(ctx, conn)
+		go ps.handle(ctx, conn, remoteUDPAddr)
 	}))
 }
 
-// TODO get IP/host and port from request!
-func (ps ProxyServer) handle(ctx context.Context, conn net.Conn) {
+func (ps ProxyServer) handle(ctx context.Context, conn net.Conn, remoteUDPAddr *net.UDPAddr) {
 	defer conn.Close()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	//TODO logger
 
 	// Get a "connected" UDP conn
-	log.Printf("PROXYSERVER:UDP:DIAL: Dialing %s", ps.RemoteUDPAddr)
-	netConn, err := net.Dial("udp", ps.RemoteUDPAddr)
+	log.Printf("PROXYSERVER:UDP:DIAL: Dialing %s", remoteUDPAddr)
+	netConn, err := net.Dial("udp", remoteUDPAddr.String())
 	if err != nil {
-		log.Printf("Error dialing remote %s: %s", ps.RemoteUDPAddr, err)
+		log.Printf("Error dialing remote %s: %s", remoteUDPAddr, err)
 	}
 	udpConn := netConn.(*net.UDPConn)
 
