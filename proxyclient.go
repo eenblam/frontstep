@@ -31,11 +31,8 @@ func DialAddr(addr string) (*ProxyClient, error) {
 	}
 
 	pc := ProxyClient{
-		UDPConn: *udpConn,
-		dstAddr: addr,
-		//make(chan []byte), // responseChan
-		//make(chan []byte), // fwCh
-		//make(chan []byte), // fwNoWaitCh
+		UDPConn:    *udpConn,
+		dstAddr:    addr,
 		readLocal:  make(chan MsgUDP),
 		readProxy:  make(chan MsgUDP),
 		writeProxy: make(chan []byte),
@@ -53,7 +50,6 @@ type ProxyClient struct {
 	// Local reads
 	readLocal chan MsgUDP
 	// Read/Write proxy
-	//readProxy  chan []byte
 	readProxy  chan MsgUDP
 	writeProxy chan []byte
 }
@@ -68,13 +64,13 @@ type MsgUDP struct {
 func (pc *ProxyClient) Run(ctx context.Context) {
 	// We want to cancel if proxy sends opclose
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
+	defer cancel()
 	log.Println("PROXYCLIENT: Running")
 
-	// net.Conn, *bufio.Reader, Handshake, error
-	// Can ignore Reader, but may want to do pbufio.PutReader(buf) for memory
 	proxyWSAddr := "ws://" + pc.dstAddr
+	// returns (net.Conn, *bufio.Reader, Handshake, error)
+	// Can ignore Reader, but may want to do pbufio.PutReader(buf) to recover memory
 	conn, _, _, err := ws.Dial(ctx, proxyWSAddr)
 	if err != nil {
 		log.Fatalf("PROXYCLIENT:WS:DIAL: %s", err)
@@ -134,20 +130,14 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 				return
 			}
 			if op == ws.OpClose {
-				//TODO is this what I want to do?
-				//TODO probably want to cancel context so writes stop
-				// or send to a Closed channel
 				log.Println("PROXYCLIENT:WS:GOT: Got OpClose from proxy. Closing.")
 				cancel()
-				//return io.EOF
 				return
 			}
 			if op != ws.OpBinary {
-				//TODO maybe hexdump?
 				log.Printf("PROXYCLIENT:WS:GOT:ERROR: Expected OpBinary, got %#v with data: %s", op, string(data))
 				continue
 			}
-			//TODO Is this just my raw bytes?
 			pc.readProxy <- MsgUDP{data, pc.dstUDPAddr}
 		}
 	}()
@@ -216,15 +206,16 @@ func (pc *ProxyClient) ReadMsgUDP(bs, oob []byte) (int, int, int, *net.UDPAddr, 
 		// Read UDP messages, prioritizing remote proxy reads over local proxy
 		// (Need a nested select for prioritization. Maybe doesn't matter?)
 		select {
+		//TODO there's room for lost data here:
+		// caller could pass small bs, but we could read a large packet.
+		// We'll need to cache this data somewhere.
 		case msgUDP := <-pc.readProxy:
-			//TODO only write up to length of b instead! Do I need to cache the extra?
 			n := copy(bs, msgUDP.bs)
 			log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromProxy: %s", bs)
 			return n, 0, 0, msgUDP.addr, nil
 		default:
 			select {
 			case msgUDP := <-pc.readLocal:
-				//TODO only write up to length of b instead! Do I need to cache the extra?
 				n := copy(bs, msgUDP.bs)
 				log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromLocal: %s", bs)
 				return n, 0, 0, msgUDP.addr, nil
