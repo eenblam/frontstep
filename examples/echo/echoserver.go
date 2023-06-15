@@ -42,7 +42,8 @@ func main() {
 	time.Sleep(time.Second)
 
 	// Run local client
-	proxyClient, err := frontstep.DialAddr(proxyServerAddr)
+	// For this example, we aren't interested in sending anything over UDP, only WebSockets.
+	proxyClient, err := frontstep.DialAddr("1.2.3.4:9000", proxyServerAddr)
 	if err != nil {
 		cancelFunc()
 		panic(err)
@@ -50,6 +51,8 @@ func main() {
 	defer proxyClient.Close()
 
 	go proxyClient.Run(ctx)
+
+	time.Sleep(100 * time.Microsecond)
 
 	proxyClient.WriteTo([]byte("hello"), proxyClient.LocalAddr())
 	buf := make([]byte, frontstep.ReadBufSize)

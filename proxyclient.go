@@ -30,9 +30,9 @@ import (
 const ReadBufSize = 1452
 
 // From https://github.com/quic-go/quic-go/blob/2ff71510a9c447aad7f5a574fe0f6cf715e749f1/client.go#L47
-func DialAddr(addr string) (*ProxyClient, error) {
+func DialAddr(dstAddr, proxyAddr string) (*ProxyClient, error) {
 	// We replace net.ListenUDP with our own type
-	netConn, err := net.Dial("udp", addr)
+	netConn, err := net.Dial("udp", dstAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -40,10 +40,17 @@ func DialAddr(addr string) (*ProxyClient, error) {
 	if !ok {
 		return nil, errors.New("couldn't convert net.Conn to net.UDPConn")
 	}
+	// Set up UDP address to return from Read* calls
+	udpAddr, err := net.ResolveUDPAddr("udp", dstAddr)
+	if err != nil {
+		return nil, err
+	}
 
 	pc := ProxyClient{
 		UDPConn:    *udpConn,
-		dstAddr:    addr,
+		dstAddr:    dstAddr,
+		dstUDPAddr: udpAddr,
+		proxyAddr:  proxyAddr,
 		readLocal:  make(chan MsgUDP),
 		readProxy:  make(chan MsgUDP),
 		writeProxy: make(chan []byte),
@@ -58,6 +65,7 @@ type ProxyClient struct {
 	net.UDPConn
 	dstAddr    string
 	dstUDPAddr *net.UDPAddr
+	proxyAddr  string
 	// Local reads
 	readLocal chan MsgUDP
 	// Read/Write proxy
@@ -79,7 +87,7 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 	defer cancel()
 	log.Println("PROXYCLIENT: Running")
 
-	proxyWSAddr := "ws://" + pc.dstAddr
+	proxyWSAddr := "ws://" + pc.proxyAddr
 	// returns (net.Conn, *bufio.Reader, Handshake, error)
 	// Can ignore Reader, but may want to do pbufio.PutReader(buf) to recover memory
 	conn, _, _, err := ws.Dial(ctx, proxyWSAddr)
