@@ -20,7 +20,7 @@ const proxyServerAddr = "localhost:3636"
 const writeTimeout = 1 * time.Second
 
 func main() {
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	// Start UDP echo server
 	go func() { echoServer(ctx, echoServerAddr) }()
 	time.Sleep(time.Second)
@@ -40,12 +40,13 @@ func main() {
 	// Run local client
 	proxyClient, err := frontstep.DialAddr(echoServerAddr, proxyServerAddr, shouldProxy)
 	if err != nil {
-		cancelFunc()
+		cancel()
 		panic(err)
 	}
 	defer proxyClient.Close()
 
-	go proxyClient.Run(ctx)
+	clientDone := make(chan bool)
+	go proxyClient.Run(ctx, clientDone)
 
 	time.Sleep(100 * time.Microsecond)
 
@@ -67,8 +68,8 @@ func main() {
 	}
 
 	// Let services tear down gracefully
-	cancelFunc()
-	//wg.Wait()
+	cancel()
+	<-clientDone
 }
 
 // Start a UDP server that echoes all data on the first stream opened by the client

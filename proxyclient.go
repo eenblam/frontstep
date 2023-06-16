@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -25,6 +26,8 @@ import (
 // Also, if we set DF (don't fragment) for the network layer and pass it a packet
 // larger than the MTU, we should expect it to be discarded.
 const ReadBufSize = 1452
+
+const Timeout = 10 * time.Millisecond
 
 func DialAddr(dstAddr, proxyAddr string, shouldProxy func([]byte) bool) (*ProxyClient, error) {
 	// We replace net.ListenUDP with our own type
@@ -74,7 +77,7 @@ type MsgUDP struct {
 	err error
 }
 
-func (pc *ProxyClient) Run(ctx context.Context) {
+func (pc *ProxyClient) Run(ctx context.Context, done chan bool) {
 	// We want to cancel if proxy sends opclose
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -86,11 +89,11 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 
 	// returns (net.Conn, *bufio.Reader, Handshake, error)
 	// Can ignore Reader, but may want to do pbufio.PutReader(buf) to recover memory
-	conn, _, _, err := ws.Dial(ctx, proxyWSAddr)
+	wsConn, _, _, err := ws.Dial(ctx, proxyWSAddr)
 	if err != nil {
 		log.Fatalf("PROXYCLIENT:WS:DIAL: %s", err)
 	}
-	defer conn.Close()
+	defer wsConn.Close()
 	log.Printf("PROXYCLIENT:WS: dialed %s", proxyWSAddr)
 
 	// Handle messages received locally
@@ -100,6 +103,7 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
+		defer cancel()
 		defer wg.Done()
 		// Both sides of the channel should have the same buffer capacity
 		b := make([]byte, ReadBufSize)
@@ -111,11 +115,15 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 				return
 			default:
 			}
+
+			pc.UDPConn.SetReadDeadline(time.Now().Add(Timeout))
 			n, _, _, _, err := pc.UDPConn.ReadMsgUDP(b, oob)
+			e, ok := err.(net.Error)
 			switch {
+			case ok && e.Timeout(): // Don't log this; it's here in part to check for cancellation
+				continue
 			case err == io.EOF:
 				log.Println("PROXYCLIENT:UDP:READ:EOF")
-				cancel()
 				return
 			case err != nil:
 				log.Printf("PROXYCLIENT:UDP:READ:ERROR: %s", err)
@@ -129,6 +137,7 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 	// Handle messages from proxy server
 	wg.Add(1)
 	go func() {
+		defer cancel()
 		defer wg.Done()
 		for {
 			select {
@@ -137,14 +146,18 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 				return
 			default:
 			}
+
 			//TODO this may interfere with our writes
 			// by updating the writer with control frames from reads
-			data, op, err := wsutil.ReadData(conn, ws.StateClientSide)
+			wsConn.SetReadDeadline(time.Now().Add(Timeout))
+			data, op, err := wsutil.ReadData(wsConn, ws.StateClientSide)
+			e, ok := err.(net.Error)
 			switch {
+			case ok && e.Timeout():
+				continue
 			case err == io.EOF:
 				log.Println("PROXYCLIENT:WS:READ: Received EOF")
 				pc.readProxy <- MsgUDP{nil, err}
-				cancel()
 				return
 			case err != nil:
 				log.Printf("PROXYCLIENT:WS:READ:ERROR: %s", err)
@@ -152,7 +165,6 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 				continue
 			case op == ws.OpClose:
 				log.Println("PROXYCLIENT:WS:GOT: Got OpClose from proxy. Closing.")
-				cancel()
 				return
 			case op != ws.OpBinary:
 				log.Printf("PROXYCLIENT:WS:GOT:ERROR: Expected OpBinary, got %#v with data: %s", op, string(data))
@@ -166,21 +178,27 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 	// Handle websocket writes to proxy
 	wg.Add(1)
 	go func() {
+		defer cancel()
 		defer wg.Done()
 		log.Println("PROXYCLIENT: Handling writes")
 		for {
+			var data []byte
 			// Maybe instead use a Closed channel, then goto DIAL if we need to reconnect?
 			select {
 			case <-ctx.Done():
 				log.Printf("PROXYCLIENT:WS:WRITE: Context done. Closing.")
 				return
-			default:
+			case data = <-pc.writeProxy:
 			}
 			// Get outbound packet
-			data := <-pc.writeProxy
 			log.Println("PROXYCLIENT:WS:WRITE: writing")
-			err = wsutil.WriteClientBinary(conn, data)
-			if err != nil {
+			wsConn.SetWriteDeadline(time.Now().Add(Timeout))
+			err = wsutil.WriteClientBinary(wsConn, data)
+			e, ok := err.(net.Error)
+			switch {
+			case ok && e.Timeout():
+				continue
+			case err != nil:
 				log.Printf("PROXYCLIENT:WS:WRITE:ERROR: %s", err)
 			}
 		}
@@ -188,7 +206,12 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 
 	// Allow writes to finish before allowing conn to close
 	wg.Wait()
-	log.Printf("PROXYCLIENT: all workers done. Closing conn to %s", conn.RemoteAddr())
+	log.Println("PROXYCLIENT: Closing UDPConn")
+	err = pc.UDPConn.Close()
+	if err != nil {
+		log.Printf("PROXYCLIENT:ERROR: couldn't close UDPConn: %s", err)
+	}
+	done <- true
 }
 
 // TODO There's some kind of issue with passing down to pc.UDPConn.WriteTo(...).
