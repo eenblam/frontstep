@@ -34,7 +34,8 @@ func main() {
 
 	// Run local client
 	// For this example, we aren't interested in sending anything over UDP, only WebSockets.
-	proxyClient, err := frontstep.DialAddr(echoServerAddr, proxyServerAddr)
+	shouldProxy := func(_ []byte) bool { return true }
+	proxyClient, err := frontstep.DialAddr(echoServerAddr, proxyServerAddr, shouldProxy)
 	if err != nil {
 		cancelFunc()
 		panic(err)

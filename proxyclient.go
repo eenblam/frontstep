@@ -27,7 +27,7 @@ import (
 // larger than the MTU, we should expect it to be discarded.
 const ReadBufSize = 1452
 
-func DialAddr(dstAddr, proxyAddr string) (*ProxyClient, error) {
+func DialAddr(dstAddr, proxyAddr string, shouldProxy func([]byte) bool) (*ProxyClient, error) {
 	// We replace net.ListenUDP with our own type
 	netConn, err := net.Dial("udp", dstAddr)
 	if err != nil {
@@ -44,13 +44,14 @@ func DialAddr(dstAddr, proxyAddr string) (*ProxyClient, error) {
 	}
 
 	pc := ProxyClient{
-		UDPConn:    *udpConn,
-		dstAddr:    dstAddr,
-		dstUDPAddr: udpAddr,
-		proxyAddr:  proxyAddr,
-		readLocal:  make(chan MsgUDP),
-		readProxy:  make(chan MsgUDP),
-		writeProxy: make(chan []byte),
+		UDPConn:     *udpConn,
+		shouldProxy: shouldProxy,
+		dstAddr:     dstAddr,
+		dstUDPAddr:  udpAddr,
+		proxyAddr:   proxyAddr,
+		readLocal:   make(chan MsgUDP),
+		readProxy:   make(chan MsgUDP),
+		writeProxy:  make(chan []byte),
 	}
 
 	return &pc, nil
@@ -59,9 +60,10 @@ func DialAddr(dstAddr, proxyAddr string) (*ProxyClient, error) {
 // TODO domain fronting
 type ProxyClient struct {
 	net.UDPConn
-	dstAddr    string
-	dstUDPAddr *net.UDPAddr
-	proxyAddr  string
+	shouldProxy func([]byte) bool
+	dstAddr     string
+	dstUDPAddr  *net.UDPAddr
+	proxyAddr   string
 	// Local reads
 	readLocal chan MsgUDP
 	// Read/Write proxy
@@ -194,34 +196,40 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 }
 
 func (pc *ProxyClient) WriteTo(bs []byte, addr net.Addr) (int, error) {
-	log.Print("PROXYCLIENT:UDP:WriteTo: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
-	pc.writeProxy <- bs
-	return len(bs), nil
-	//TODO condition for writing to underlying stream instead
-	//return pc.UDPConn.WriteTo(p, addr)
+	if pc.shouldProxy(bs) {
+		log.Print("PROXYCLIENT:UDP:WriteTo:PROXY: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
+		pc.writeProxy <- bs
+		return len(bs), nil
+	} else {
+		log.Print("PROXYCLIENT:UDP:WriteTo:LOCAL: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
+		return pc.UDPConn.WriteTo(bs, addr)
+	}
 }
 
 func (pc *ProxyClient) WriteMsgUDP(bs, oob []byte, addr *net.UDPAddr) (int, int, error) {
-	log.Print("PROXYCLIENT:UDP:WriteMsgUDP: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
-	pc.writeProxy <- bs
-	//TODO should we lie about sending oob bytes?
-	return len(bs), len(oob), nil
-	//TODO condition for writing to underlying stream instead
-	//return pc.UDPConn.WriteMsgUDP(p, oob, addr)
+	if pc.shouldProxy(bs) {
+		log.Print("PROXYCLIENT:UDP:WriteMsgUDP:PROXY: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
+		pc.writeProxy <- bs
+		//TODO should we lie about sending oob bytes?
+		return len(bs), len(oob), nil
+	} else {
+		log.Print("PROXYCLIENT:UDP:WriteMsgUDP:LOCAL: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
+		return pc.UDPConn.WriteMsgUDP(bs, oob, addr)
+	}
 }
 
 func (pc *ProxyClient) ReadFrom(bs []byte) (int, net.Addr, error) {
 	select {
 	case msgUDP := <-pc.readProxy:
 		n := copy(bs, msgUDP.bs)
-		log.Printf("PROXYCLIENT:UDP:ReadFrom:FromProxy: %s", bs[:n])
+		log.Printf("PROXYCLIENT:UDP:ReadFrom:PROXY: %s", bs[:n])
 		// We can always return the original address:
 		// since we're emulating a "connected" UDP socket,
 		// the kernel should only be returning packets from our destination.
 		return n, pc.dstUDPAddr, msgUDP.err
 	case msgUDP := <-pc.readLocal:
 		n := copy(bs, msgUDP.bs)
-		log.Printf("PROXYCLIENT:UDP:ReadFrom:FromLocal: %s", bs[:n])
+		log.Printf("PROXYCLIENT:UDP:ReadFrom:LOCAL: %s", bs[:n])
 		return n, pc.dstUDPAddr, msgUDP.err
 	}
 }
@@ -232,11 +240,11 @@ func (pc *ProxyClient) ReadMsgUDP(bs, oob []byte) (int, int, int, *net.UDPAddr, 
 	select {
 	case msgUDP := <-pc.readProxy:
 		n := copy(bs, msgUDP.bs)
-		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromProxy: %s", bs[:n])
+		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:PROXY: %s", bs[:n])
 		return n, 0, 0, pc.dstUDPAddr, msgUDP.err
 	case msgUDP := <-pc.readLocal:
 		n := copy(bs, msgUDP.bs)
-		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:FromLocal: %s", bs[:n])
+		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:LOCAL: %s", bs[:n])
 		return n, 0, 0, pc.dstUDPAddr, msgUDP.err
 	}
 }
