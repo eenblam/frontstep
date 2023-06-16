@@ -70,8 +70,7 @@ func echoServer(ctx context.Context, address string) {
 	defer conn.Close()
 	log.Printf("ECHOSERVER:LISTEN: listening on %s", conn.LocalAddr())
 
-	// Our simple echo protocol is only going to support payloads up to 1024 bytes in size
-	buf := make([]byte, 1024)
+	buf := make([]byte, frontstep.ReadBufSize)
 
 	for {
 		select {
@@ -85,7 +84,7 @@ func echoServer(ctx context.Context, address string) {
 			log.Printf("ECHOSERVER:READ:ERROR: failed to read from UDP: %s", err)
 			continue
 		}
-		log.Printf("ECHOSERVER:GOT: from %s: '%s'", addr, string(buf))
+		log.Printf("ECHOSERVER:GOT: from %s: '%s'", addr, string(buf[:n]))
 		err = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 		if err != nil {
 			log.Printf("ECHOSERVER:ERROR: failed to set write deadline: %s", err)
