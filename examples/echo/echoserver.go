@@ -27,11 +27,7 @@ func main() {
 
 	// Start "remote" proxy
 	// This would normally be domain-fronted
-	ps := &frontstep.ProxyServer{
-		LocalWSAddr: proxyServerAddr,
-	}
-
-	go ps.Run(ctx)
+	go frontstep.ProxyListenAndServe(ctx, proxyServerAddr)
 	time.Sleep(time.Second)
 
 	// Proxy "hello". Anything else goes over local UDP conn.

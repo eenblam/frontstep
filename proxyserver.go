@@ -10,16 +10,11 @@ import (
 	"github.com/gobwas/ws/wsutil"
 )
 
-type ProxyServer struct {
-	// Where we're serving HTTP/WebSocket
-	LocalWSAddr string
-}
-
-func (ps ProxyServer) Run(ctx context.Context) {
+func ProxyListenAndServe(ctx context.Context, localWSAddr string) {
 	// Get a websocket connection
 	//TODO add cancel context
 	log.Println("PROXYSERVER: Running")
-	http.ListenAndServe(ps.LocalWSAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	http.ListenAndServe(localWSAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("PROXYSERVER:HTTP:GOT: URL %s", r.URL)
 		rawAddr := r.URL.Query().Get("address")
 		remoteUDPAddr, err := net.ResolveUDPAddr("udp", rawAddr)
@@ -34,11 +29,11 @@ func (ps ProxyServer) Run(ctx context.Context) {
 			log.Printf("Couldn't upgrade request from %s: %s", conn.RemoteAddr().String(), err)
 			return
 		}
-		go ps.handle(ctx, conn, remoteUDPAddr)
+		go handleProxyConn(ctx, conn, remoteUDPAddr)
 	}))
 }
 
-func (ps ProxyServer) handle(ctx context.Context, conn net.Conn, remoteUDPAddr *net.UDPAddr) {
+func handleProxyConn(ctx context.Context, conn net.Conn, remoteUDPAddr *net.UDPAddr) {
 	defer conn.Close()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
