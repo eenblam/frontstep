@@ -21,6 +21,7 @@ const writeTimeout = 1 * time.Second
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	// Start UDP echo server
 	go func() { echoServer(ctx, echoServerAddr) }()
 	time.Sleep(time.Second)
@@ -38,17 +39,12 @@ func main() {
 		return false
 	}
 	// Run local client
-	proxyClient, err := frontstep.DialAddr(echoServerAddr, proxyServerAddr, shouldProxy)
+	proxyClient, err := frontstep.DialAddr(ctx, echoServerAddr, proxyServerAddr, shouldProxy)
 	if err != nil {
 		cancel()
 		panic(err)
 	}
 	defer proxyClient.Close()
-
-	clientDone := make(chan bool)
-	go proxyClient.Run(ctx, clientDone)
-
-	time.Sleep(100 * time.Microsecond)
 
 	buf := make([]byte, frontstep.ReadBufSize)
 
@@ -66,10 +62,6 @@ func main() {
 	} else {
 		log.Printf("ECHOSERVER:MAIN:ReadMsgUDP: Got '%s'", string(buf[:n]))
 	}
-
-	// Let services tear down gracefully
-	cancel()
-	<-clientDone
 }
 
 // Start a UDP server that echoes all data on the first stream opened by the client
