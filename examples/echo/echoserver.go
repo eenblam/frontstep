@@ -3,7 +3,9 @@ package main
 // This is just a small UDP echo server for demonstration purposes
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -32,9 +34,14 @@ func main() {
 	go ps.Run(ctx)
 	time.Sleep(time.Second)
 
+	// Proxy "hello". Anything else goes over local UDP conn.
+	shouldProxy := func(bs []byte) bool {
+		if len(bs) == 5 && bytes.Equal(bs, []byte("hello")) {
+			return true
+		}
+		return false
+	}
 	// Run local client
-	// For this example, we aren't interested in sending anything over UDP, only WebSockets.
-	shouldProxy := func(_ []byte) bool { return true }
 	proxyClient, err := frontstep.DialAddr(echoServerAddr, proxyServerAddr, shouldProxy)
 	if err != nil {
 		cancelFunc()
@@ -46,13 +53,21 @@ func main() {
 
 	time.Sleep(100 * time.Microsecond)
 
-	proxyClient.WriteTo([]byte("hello"), proxyClient.LocalAddr())
 	buf := make([]byte, frontstep.ReadBufSize)
+
+	proxyClient.WriteMsgUDP([]byte("hello"), nil, nil)
 	n, _, _, _, err := proxyClient.ReadMsgUDP(buf, nil)
 	if err != nil {
 		log.Printf("ECHOSERVER:MAIN:ReadMsgUDP:ERROR: %s", err)
 	} else {
-		log.Printf("ECHOSERVER:MAIN:ReadMsgUDP: Got %s", string(buf[:n]))
+		log.Printf("ECHOSERVER:MAIN:ReadMsgUDP: Got '%s'", string(buf[:n]))
+	}
+	proxyClient.WriteMsgUDP([]byte("hi"), nil, nil)
+	n, _, _, _, err = proxyClient.ReadMsgUDP(buf, nil)
+	if err != nil {
+		log.Printf("ECHOSERVER:MAIN:ReadMsgUDP:ERROR: %s", err)
+	} else {
+		log.Printf("ECHOSERVER:MAIN:ReadMsgUDP: Got '%s'", string(buf[:n]))
 	}
 
 	// Let services tear down gracefully
@@ -79,20 +94,22 @@ func echoServer(ctx context.Context, address string) {
 			return
 		default:
 		}
+		log.Println("ECHOSERVER:UDP:READ: Reading")
 		n, addr, err := conn.ReadFrom(buf)
 		if err != nil { //TODO check more specific error
 			log.Printf("ECHOSERVER:READ:ERROR: failed to read from UDP: %s", err)
 			continue
 		}
-		log.Printf("ECHOSERVER:GOT: from %s: '%s'", addr, string(buf[:n]))
+		log.Printf("ECHOSERVER:UDP:GOT: from %s: '%s'", addr, string(buf[:n]))
 		err = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 		if err != nil {
 			log.Printf("ECHOSERVER:ERROR: failed to set write deadline: %s", err)
 			return
 		}
-		_, err = conn.WriteTo(buf[:n], addr)
+		out := []byte(fmt.Sprintf("%s %s", string(buf[:n]), addr.String()))
+		_, err = conn.WriteTo(out, addr)
 		if err != nil { //TODO check more specific error
-			log.Printf("ECHOSERVER:WRITE:ERROR: failed to write to UDP: %s", err)
+			log.Printf("ECHOSERVER:UDP:WRITE:ERROR: failed to write to UDP: %s", err)
 			continue
 		}
 	}

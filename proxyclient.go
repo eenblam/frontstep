@@ -3,7 +3,6 @@ package frontstep
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,25 +28,22 @@ const ReadBufSize = 1452
 
 func DialAddr(dstAddr, proxyAddr string, shouldProxy func([]byte) bool) (*ProxyClient, error) {
 	// We replace net.ListenUDP with our own type
-	netConn, err := net.Dial("udp", dstAddr)
-	if err != nil {
-		return nil, err
-	}
-	udpConn, ok := netConn.(*net.UDPConn)
-	if !ok {
-		return nil, errors.New("couldn't convert net.Conn to net.UDPConn")
-	}
 	// Set up UDP address to return from Read* calls
 	udpAddr, err := net.ResolveUDPAddr("udp", dstAddr)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("PROXYCLIENT:DialAddr: dialing %s", dstAddr)
+	udpConn, err := net.DialUDP("udp", nil, udpAddr)
+	if err != nil {
+		return nil, err
+	}
 
 	pc := ProxyClient{
-		UDPConn:     *udpConn,
+		UDPConn:     udpConn,
 		shouldProxy: shouldProxy,
 		dstAddr:     dstAddr,
-		dstUDPAddr:  udpAddr,
+		DstUDPAddr:  udpAddr,
 		proxyAddr:   proxyAddr,
 		readLocal:   make(chan MsgUDP),
 		readProxy:   make(chan MsgUDP),
@@ -59,10 +55,10 @@ func DialAddr(dstAddr, proxyAddr string, shouldProxy func([]byte) bool) (*ProxyC
 
 // TODO domain fronting
 type ProxyClient struct {
-	net.UDPConn
+	*net.UDPConn
 	shouldProxy func([]byte) bool
 	dstAddr     string
-	dstUDPAddr  *net.UDPAddr
+	DstUDPAddr  *net.UDPAddr
 	proxyAddr   string
 	// Local reads
 	readLocal chan MsgUDP
@@ -195,6 +191,9 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 	log.Printf("PROXYCLIENT: all workers done. Closing conn to %s", conn.RemoteAddr())
 }
 
+// TODO There's some kind of issue with passing down to pc.UDPConn.WriteTo(...).
+// I think it's meant for non-connected use.
+// But for some reason, it's hanging on a connected socket in a way that WriteMsgUDP doesn't.
 func (pc *ProxyClient) WriteTo(bs []byte, addr net.Addr) (int, error) {
 	if pc.shouldProxy(bs) {
 		log.Print("PROXYCLIENT:UDP:WriteTo:PROXY: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
@@ -206,6 +205,7 @@ func (pc *ProxyClient) WriteTo(bs []byte, addr net.Addr) (int, error) {
 	}
 }
 
+// Note that addr should almost always be nil, since we're always using a "connected" UDP socket.
 func (pc *ProxyClient) WriteMsgUDP(bs, oob []byte, addr *net.UDPAddr) (int, int, error) {
 	if pc.shouldProxy(bs) {
 		log.Print("PROXYCLIENT:UDP:WriteMsgUDP:PROXY: Packet:\n\t" + strings.ReplaceAll(hex.Dump(bs), "\n", "\n\t"))
@@ -226,11 +226,11 @@ func (pc *ProxyClient) ReadFrom(bs []byte) (int, net.Addr, error) {
 		// We can always return the original address:
 		// since we're emulating a "connected" UDP socket,
 		// the kernel should only be returning packets from our destination.
-		return n, pc.dstUDPAddr, msgUDP.err
+		return n, pc.DstUDPAddr, msgUDP.err
 	case msgUDP := <-pc.readLocal:
 		n := copy(bs, msgUDP.bs)
 		log.Printf("PROXYCLIENT:UDP:ReadFrom:LOCAL: %s", bs[:n])
-		return n, pc.dstUDPAddr, msgUDP.err
+		return n, pc.DstUDPAddr, msgUDP.err
 	}
 }
 
@@ -241,10 +241,10 @@ func (pc *ProxyClient) ReadMsgUDP(bs, oob []byte) (int, int, int, *net.UDPAddr, 
 	case msgUDP := <-pc.readProxy:
 		n := copy(bs, msgUDP.bs)
 		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:PROXY: %s", bs[:n])
-		return n, 0, 0, pc.dstUDPAddr, msgUDP.err
+		return n, 0, 0, pc.DstUDPAddr, msgUDP.err
 	case msgUDP := <-pc.readLocal:
 		n := copy(bs, msgUDP.bs)
 		log.Printf("PROXYCLIENT:UDP:ReadMsgUDP:LOCAL: %s", bs[:n])
-		return n, 0, 0, pc.dstUDPAddr, msgUDP.err
+		return n, 0, 0, pc.DstUDPAddr, msgUDP.err
 	}
 }
