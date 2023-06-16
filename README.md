@@ -32,7 +32,7 @@ Is it a fun idea? I think so.
 * [ ] Fun challenge: incorporate quic-go directly. Requires resolving [quic-go #3891](https://github.com/quic-go/quic-go/issues/3891).
 * [ ] Set DF bit to prevent fragmentation of outgoing UDP packets
 
-## Usage
+## Setup
 
 Prereq: install Go >= 1.20. The `go run` below should install the `gobwas` packages needed for websocket support.
 
@@ -43,3 +43,32 @@ git clone https://github.com/eenblam/frontstep
 cd frontstep/examples/echo
 go run .
 ```
+
+## Simple Example
+
+`examples/echo/echoserver.go` will:
+
+* start a UDP echo server that replies to `$STRING` with `$STRING $REMOTE_ADDRESS`
+* start a `ProxyServer` that accepts websocket connections to `/?address=$ADDRESS`,
+then forwards any websocket messages over UDP to `$ADDRESS` (in `hostname:port` format.)
+* start a `ProxyClient` with two connections: a connected UDP socket to the echo server, and a websocket connection to the proxy server.
+    * The `ProxyClient` is also configured with a function for routing any UDP messages written to it, which returns `true` only for the string "hello", otherwise `false`.
+* write packets "hello" and "hi" to the proxy client, and listen for replies on both of its connections.
+
+(This is a first step towards implementing QUICstep:
+routing long header packets for connection negotiation over a proxy,
+and then sending short header (data) packets over a UDP socket.)
+
+There can be a lot of output, but filtering for the MAIN function of the program, we see:
+
+```bash
+b@tincan:~/b/gh/eenblam/frontstep/examples/echo$ go run . 2>&1 | grep MAIN
+2023/06/15 20:53:38 ECHOSERVER:MAIN:ReadMsgUDP: Got 'hello 127.0.0.1:50557'
+2023/06/15 20:53:38 ECHOSERVER:MAIN:ReadMsgUDP: Got 'hi 127.0.0.1:56729'
+```
+
+Here, we see that the echo server received "hello" and "hi" over different connections,
+as expected.
+
+(This doesn't include the domain fronting aspect!
+It's just meant to provide a proof of concept for the QUICstep part over localhost.)
