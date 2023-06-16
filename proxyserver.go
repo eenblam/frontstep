@@ -55,18 +55,24 @@ func (ps ProxyServer) handle(ctx context.Context, conn net.Conn, remoteUDPAddr *
 	// Get a websocket message? Forward bytes to client over UDP
 	go func() {
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			msg, op, err := wsutil.ReadClientData(conn)
 			if err != nil {
-				//TODO reply with error? Seems like no, since we want to just be a lossy conn
+				// Don't sweat errors, since we want to just be a lossy conn
 				log.Printf("PROXYSERVER:WS:GOT:ERROR: %s", err)
+				continue
 			}
-			//log.Printf("PROXYSERVER:WS:GOT: OP: %s MSG: %s", op, msg)
 			log.Printf("PROXYSERVER:WS:GOT: OP: %#v", op)
 			if op == ws.OpClose {
 				//TODO Write any remaining data?
 				cancel()
 				return
 			}
+
 			// Unwrap packet, confirm long header (and address?)
 			log.Printf("PROXYSERVER:UDP:SEND: Sending len=%d", len(msg))
 			_, err = udpConn.Write([]byte(msg))
@@ -74,17 +80,17 @@ func (ps ProxyServer) handle(ctx context.Context, conn net.Conn, remoteUDPAddr *
 				log.Printf("PROXYSERVER:UDP:SEND:ERROR: Couldn't write to stream: %s", err)
 				return
 			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
 		}
 	}()
 
 	// Get a UDP datagram? Forward on websocket
 	buf := make([]byte, ReadBufSize)
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		buf = buf[:cap(buf)]
 		// Get packet
 		log.Println("PROXYSERVER:UDP:READ: Reading")

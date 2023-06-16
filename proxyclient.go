@@ -114,11 +114,15 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 			default:
 			}
 			n, _, _, _, err := pc.UDPConn.ReadMsgUDP(b, oob)
-			if err != nil {
+			switch {
+			case err == io.EOF:
+				log.Println("PROXYCLIENT:UDP:READ:EOF")
+				cancel()
+				return
+			case err != nil:
 				log.Printf("PROXYCLIENT:UDP:READ:ERROR: %s", err)
 				continue
 			}
-			//TODO call cancel if UDPConn is closed!
 
 			pc.readLocal <- MsgUDP{b[:n], err}
 		}
@@ -138,28 +142,26 @@ func (pc *ProxyClient) Run(ctx context.Context) {
 			//TODO this may interfere with our writes
 			// by updating the writer with control frames from reads
 			data, op, err := wsutil.ReadData(conn, ws.StateClientSide)
-			if err != nil && err != io.EOF {
-				//TODO handle error
-				log.Printf("PROXYCLIENT:WS:READ:ERROR: %s", err)
-				pc.readProxy <- MsgUDP{nil, err}
-				continue
-			}
-			if err == io.EOF {
+			switch {
+			case err == io.EOF:
 				log.Println("PROXYCLIENT:WS:READ: Received EOF")
 				pc.readProxy <- MsgUDP{nil, err}
 				cancel()
 				return
-			}
-			if op == ws.OpClose {
+			case err != nil:
+				log.Printf("PROXYCLIENT:WS:READ:ERROR: %s", err)
+				pc.readProxy <- MsgUDP{nil, err}
+				continue
+			case op == ws.OpClose:
 				log.Println("PROXYCLIENT:WS:GOT: Got OpClose from proxy. Closing.")
 				cancel()
 				return
-			}
-			if op != ws.OpBinary {
+			case op != ws.OpBinary:
 				log.Printf("PROXYCLIENT:WS:GOT:ERROR: Expected OpBinary, got %#v with data: %s", op, string(data))
 				continue
+			default:
+				pc.readProxy <- MsgUDP{data, nil}
 			}
-			pc.readProxy <- MsgUDP{data, nil}
 		}
 	}()
 
